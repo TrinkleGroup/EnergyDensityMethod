@@ -217,4 +217,4 @@ EDM should be considered as a post-processing of the outputs and parameters from
 * More references to come.
 
 # Contributors
-Yang Dan (version 5.4.4), Min Yu (version 4.6.36/4.6.38) and Dallas R. Trinkle
+Yang Dan (implementations in VASP 5.4.4), Min Yu (implementations in VASP 4.6.36/4.6.38) and Dallas R. Trinkle
