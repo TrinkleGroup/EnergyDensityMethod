@@ -1,0 +1,2196 @@
+diff -udNr vasp.4.6.36/EDM.F vasp.4.6.36-edm/EDM.F
+--- vasp.4.6.36/EDM.F	1969-12-31 18:00:00.000000000 -0600
++++ vasp.4.6.36-edm/EDM.F	2011-07-21 17:44:50.000000000 -0500
+@@ -0,0 +1,428 @@
++#include "symbol.inc"
++!*********************SUBROUTINE EDM_Ta*********************
++!*REFORMAT EDM_Ta                       
++!*Note: Ta written out from elf.F has complete data from all nodes
++!       but not in correct format.
++!***********************************************************
++      SUBROUTINE EDM_Ta(GRID,LATT_CUR,T_INFO,DYN,INFO,IO,Ta,FILENAME)
++      USE base
++      USE poscar
++      USE prec
++      USE mgrid
++      USE lattice
++      USE constant
++      USE poscar     !CALL OUTPOS, header
++      USE fileio     !CALL OUTCHG
++      
++      IMPLICIT COMPLEX(q) (c)
++      IMPLICIT REAL(q) (A-B,D-H,O-Z)
++
++      TYPE (grid_3d)     GRID
++      TYPE (latt)        LATT_CUR      
++      TYPE (type_info)   T_INFO
++      TYPE (dynamics)    DYN
++      TYPE (info_struct) INFO
++      TYPE (in_struct)   IO
++            
++      INTEGER :: IU,I,M,NC,NX,NY,NZ
++      REAl(q) :: Ta_SUM=0._q,Ta_SUM_layer
++      REAL(q) :: Ta(GRID%RL%NROW,GRID%RL%NCOL)
++      REAL(q),ALLOCATABLE:: Ta_WORK(:,:,:)
++      INTEGER :: NWRITE, NWRITTEN, N           !write out 'EDM_Ta'
++      CHARACTER*40 FORM                        !write out 'EDM_Ta'
++      CHARACTER(*) FILENAME
++      
++      ALLOCATE(Ta_WORK(GRID%NGX,GRID%NGY,GRID%NGZ))
++       
++      IU =5423
++      Ta_WORK=0
++      Ta_SUM=0
++      DO NC=1,GRID%RL%NCOL
++         NX= GRID%RL%I2(NC)
++         NY= GRID%RL%I3(NC)
++         DO NZ=1,GRID%NGZ
++            Ta_WORK(NX,NY,NZ)=Ta(NZ,NC)
++!            Ta_SUM = Ta_SUM + Ta(NZ,NC)
++         ENDDO
++      ENDDO
++      CALLMPI( M_sum_d(GRID%COMM, Ta_WORK(1,1,1), GRID%NPLWV))
++
++io_begin        
++      write(IO%IU6,*)'ET = ',SUM(Ta_WORK)/GRID%NPLWV
++
++      IU=5425     
++
++      OPEN(UNIT=IU, FILE=FILENAME, STATUS='UNKNOWN')
++      CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++    &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++    &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++      FORM='(1(1X,E17.11))'                      
++      NWRITE=5
++      WRITE(IU,'(3I5)')GRID%NGX,GRID%NGY,GRID%NGZ
++      NWRITTEN=0
++      DO NZ=1,GRID%NGZ
++        DO NY=1,GRID%NGY
++        DO NX=1,GRID%NGX
++        Ta_SUM_layer = Ta_SUM_layer + Ta_WORK(NX,NY,NZ)
++           NWRITTEN=NWRITTEN+1
++           IF (MOD(NWRITTEN,NWRITE)==0) THEN
++              WRITE(IU,FORM) Ta_WORK(NX,NY,NZ)
++           ELSE
++              WRITE(IU,FORM,ADVANCE='NO') Ta_WORK(NX,NY,NZ)
++           ENDIF
++        ENDDO   
++        ENDDO  
++      ENDDO
++      IF ( MOD(NWRITTEN,NWRITE)/=0 ) WRITE(IU,*)''
++      CLOSE(IU)
++io_end
++      DEALLOCATE(Ta_WORK)
++
++      END SUBROUTINE EDM_Ta
++
++!***************SUBROUTINE EDM_XC: XC energy density***********
++!*  LDA: EDM%excLDA(potex2.F)                                 *
++!*  GGA: EDM%excLDA(potex2.F) + EDM%excGGA(xcgrad.F)          *
++!*  write out: file 'EDM_exc'                                 * 
++!**************************************************************
++      SUBROUTINE EDM_XC(GRIDC,LATT_CUR,T_INFO,DYN,INFO,IO,WDES,EDM)
++
++      USE base
++      USE poscar
++      USE prec
++      USE mgrid
++      USE lattice
++      USE constant
++      USE poscar     !CALL OUTPOS, header
++      USE fileio     !CALL OUTCHG
++      USE wave
++      USE edenm
++      
++      IMPLICIT COMPLEX(q) (c)
++      IMPLICIT REAL(q) (A-B,D-H,O-Z)
++
++      TYPE (grid_3d)     GRIDC
++      TYPE (latt)        LATT_CUR      
++      TYPE (type_info)   T_INFO
++      TYPE (dynamics)    DYN
++      TYPE (info_struct) INFO
++      TYPE (in_struct)   IO
++      TYPE (wavedes)  WDES
++      TYPE (EDen)        EDM
++
++
++      INTEGER :: IU,I,M
++      REAL(q),ALLOCATABLE:: exc(:),excGGA(:)
++      REAL(q) :: EXC_SUM=0._q
++      INTEGER :: NWRITE, NWRITTEN, N, NZ       !write out 'EDM_exc'
++      CHARACTER*40 FORM                        !write out 'EDM_exc'
++      REAL(q),ALLOCATABLE:: WORK(:)       !write out 'EDM_exc'
++      INTEGER NODE_ME, IONODE
++
++      NODE_ME=WDES%COMM%NODE_ME
++      IONODE =WDES%COMM%IONODE
++
++      ALLOCATE(exc(GRIDC%NPLWV),excGGA(GRIDC%NPLWV))
++      ALLOCATE(WORK(GRIDC%NGX*GRIDC%NGY))
++
++      CALL MRG_GRID_RL(GRIDC, exc, EDM%excLDA)
++io_begin
++      EXC_SUM = SUM(exc)
++#ifndef SUPPORT_EDM_GGA 
++      write(IO%IU6,*)'EXC_LDA = ',EXC_sum/GRIDC%NPLWV
++#endif
++io_end
++
++#ifdef SUPPORT_EDM_GGA 
++      CALL MRG_GRID_RL(GRIDC, excGGA, EDM%excGGA)
++io_begin
++      DO I=1,GRIDC%NPLWV
++        exc(I) = exc(I) + excGGA(I)
++      ENDDO
++      EXC_SUM = EXC_SUM + SUM(excGGA)
++      write(IO%IU6,*)'EXC_GGA = ',EXC_sum/GRIDC%NPLWV
++io_end
++#endif    
++      
++io_begin
++      IU = 5425
++      OPEN(UNIT=IU, FILE='EDM_exc', STATUS='UNKNOWN')
++      CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++    &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++    &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++      FORM='(1(1X,E17.11))'                      
++      NWRITE=5
++      WRITE(IU,'(3I5)')GRIDC%NGX,GRIDC%NGY,GRIDC%NGZ
++      NWRITTEN=0
++      DO NZ=1,GRIDC%NGZ
++!        CALL MRG_GRID_RL_PLANE(GRIDC, WORK, exc, NZ) 
++      WORK(1:GRIDC%NGX*GRIDC%NGY)=exc(GRIDC%NGX*GRIDC%NGY*(NZ-1)+1:GRIDC%NGX*GRIDC%NGY*NZ)
++      DO N=1,GRIDC%NGX*GRIDC%NGY
++           NWRITTEN=NWRITTEN+1
++           IF (MOD(NWRITTEN,NWRITE)==0) THEN
++              WRITE(IU,FORM) WORK(N)
++           ELSE
++              WRITE(IU,FORM,ADVANCE='NO') WORK(N)
++           ENDIF
++        ENDDO  
++      ENDDO
++      IF ( MOD(NWRITTEN,NWRITE)/=0 ) WRITE(IU,*)''
++      CLOSE(IU)
++io_end
++      DEALLOCATE(exc,excGGA)
++      DEALLOCATE(WORK)
++
++      END SUBROUTINE EDM_XC
++
++
++!*******************************************************************
++!  read in a density file, add to an existing density              *
++!*******************************************************************
++
++      SUBROUTINE EDM_RDen(NPLWV,NIONS,L_HEADER,V,FACT,FILENAME)
++      USE base
++      USE prec
++      
++      IMPLICIT COMPLEX(q) (c)
++      IMPLICIT REAL(q) (A-B,D-H,O-Z)
++
++      INTEGER :: IU,I,N,NPLWV,NIONS
++      REAL(q) :: V(NPLWV),FACT
++      LOGICAL :: L_HEADER               
++      CHARACTER(*) FILENAME
++      REAL(q),ALLOCATABLE:: WORK(:)      
++      ALLOCATE(WORK(NPLWV))
++      
++      IU =5423
++       
++      OPEN(unit=IU,FILE=FILENAME,STATUS='UNKNOWN')                        
++      IF(L_HEADER) THEN
++      DO I=1,9+NIONS  !read in header
++        READ(IU,'(3I5)')
++      ENDDO 
++      ELSE
++      READ(IU,'(3I5)') 
++      ENDIF
++      DO I=1,NPLWV,5
++        IF (I+4 .LE. NPLWV) THEN 
++          READ(IU,*) WORK(I:I+4)
++        ELSE
++          N = MOD(NPLWV-I,5) 
++          READ(IU,*) WORK(I:I+N)
++        ENDIF
++      ENDDO
++      CLOSE(IU)   
++
++      DO I=1,NPLWV
++        V(I) = V(I)+FACT*WORK(I)
++      ENDDO
++      
++      END SUBROUTINE
++
++!*******************************************************************
++!1.read in Hartree potential 'EDM_VhCAR'      (POTLOK)             *
++!          Local pseudopotential 'EDM_VloCAR' (POTLOK(pot.F))      *
++!          Model potential 'EDM_VmodCAR'      (POTLOK,POTMOD)      *
++!2.read in charge density 'EDM_neCAR' and 'EDM_nmodCAR'            *
++!3.calculate the total classical Coulomb energy density w/ Eq(3.21)*
++!  write out energy density to file 'EDM_VnCAR'                    *
++!*******************************************************************
++      SUBROUTINE EDM_VnCC(GRIDC,LATT_CUR,T_INFO,DYN,INFO,IO, &
++& FILENAME_Vloc, FILENAME_Vh, FILENAME_Vmod, FILENAME_ne, FILENAME_nmod, &
++& FILENAME_Vn)
++      USE base
++      USE poscar
++      USE prec
++      USE mgrid
++      USE lattice
++      USE constant
++      USE poscar     !CALL OUTPOS, header
++      USE fileio     !CALL OUTCHG
++      
++      IMPLICIT COMPLEX(q) (c)
++      IMPLICIT REAL(q) (A-B,D-H,O-Z)
++
++      TYPE (grid_3d)     GRIDC
++      TYPE (latt)        LATT_CUR      
++      TYPE (type_info)   T_INFO
++      TYPE (dynamics)    DYN
++      TYPE (info_struct) INFO
++      TYPE (in_struct)   IO
++            
++      INTEGER :: IU,I,N
++      REAL(q) :: Vn_SUM,ntot,Vtot
++      REAL(q),ALLOCATABLE:: V(:),rho(:),Vn(:)
++      INTEGER :: NWRITE, NWRITTEN, NZ       !write out 'EDM_VnCC'
++      CHARACTER*40 FORM                     !write out 'EDM_VnCC'
++      CHARACTER(*) FILENAME_Vloc,FILENAME_Vh,FILENAME_Vmod
++      CHARACTER(*) FILENAME_ne,FILENAME_nmod,FILENAME_Vn
++      LOGICAL :: L_V_HEADER,L_n_HEADER    !.T. header in FILE, .F. no header in FILE
++      REAL(q),ALLOCATABLE:: WORK(:)       !write out 'EDM_VnCC'
++
++      ALLOCATE(V(GRIDC%NPLWV),rho(GRIDC%NPLWV),Vn(GRIDC%NPLWV))
++      ALLOCATE(WORK(GRIDC%NGX*GRIDC%NGY))
++      
++      IU =5423
++
++      L_V_HEADER = .TRUE.
++      L_n_HEADER = .TRUE.       
++
++      V = 0
++      CALL EDM_RDen(GRIDC%NPLWV,T_INFO%NIONS,L_V_HEADER,V,1._q,FILENAME_Vloc)
++      CALL EDM_RDen(GRIDC%NPLWV,T_INFO%NIONS,L_V_HEADER,V,0.5_q,FILENAME_Vh)
++      CALL EDM_RDen(GRIDC%NPLWV,T_INFO%NIONS,L_V_HEADER,V,0.5_q,FILENAME_Vmod)
++
++      rho = 0
++      CALL EDM_RDen(GRIDC%NPLWV,T_INFO%NIONS,L_n_HEADER,rho,1._q,FILENAME_ne)
++      CALL EDM_RDen(GRIDC%NPLWV,T_INFO%NIONS,L_n_HEADER,rho,-1._q,FILENAME_nmod)
++
++!total Couloumb energy density=[Vloc+0.5*Vh+0.5*Vmod]*[ne-nmod]
++
++      Vn = 0.0_q
++      Vn_SUM = 0.0_q
++      ntot = 0.0_q
++      Vtot = 0.0_q 
++
++      DO I=1,GRIDC%NPLWV
++         Vn(I)=V(I)*rho(I)
++         Vn_SUM = Vn_SUM + Vn(I)
++         Vtot=Vtot+V(I)
++         ntot=ntot+rho(I)
++      ENDDO
++      write(IO%IU6,*)'ECC = ',Vn_SUM/GRIDC%NPLWV
++                       
++! NOTE: SETUNB is done on each processer
++! SETUNB called in pot.F before merging and writing
++                              
++      IU=5425     
++
++      OPEN(UNIT=IU, FILE=FILENAME_Vn, STATUS='UNKNOWN')
++      CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++    &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++    &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++      FORM='(1(1X,E17.11))'                      
++      NWRITE=5
++      WRITE(IU,'(3I5)')GRIDC%NGX,GRIDC%NGY,GRIDC%NGZ
++      NWRITTEN=0
++      DO NZ=1,GRIDC%NGZ
++      WORK(1:GRIDC%NGX*GRIDC%NGY)=Vn(GRIDC%NGX*GRIDC%NGY*(NZ-1)+1:GRIDC%NGX*GRIDC%NGY*NZ)
++        DO N=1,GRIDC%NGX*GRIDC%NGY
++           NWRITTEN=NWRITTEN+1
++           IF (MOD(NWRITTEN,NWRITE)==0) THEN
++              WRITE(IU,FORM) WORK(N)
++           ELSE
++              WRITE(IU,FORM,ADVANCE='NO') WORK(N)
++           ENDIF
++        ENDDO  
++      ENDDO
++      IF ( MOD(NWRITTEN,NWRITE)/=0 ) WRITE(IU,*)''
++      CLOSE(IU)
++
++      DEALLOCATE(V,rho)
++      DEALLOCATE(WORK,Vn)
++
++      END SUBROUTINE EDM_VnCC
++
++      SUBROUTINE EDM_Gaussian(GRID,LATT_CUR,T_INFO,DYN,INFO)
++      USE base
++      USE poscar   !call OUTPOS, header
++      USE prec
++      USE mgrid
++      USE lattice
++      USE constant
++    
++      IMPLICIT COMPLEX(q) (c)
++      IMPLICIT REAL(q) (A-B,D-H,O-Z)
++      IMPLICIT INTEGER (N,I,J)
++
++      TYPE (grid_3d)     GRID
++      TYPE (latt)        LATT_CUR
++      TYPE (type_info)   T_INFO
++      TYPE (dynamics)    DYN
++      TYPE (info_struct) INFO
++
++      INTEGER :: NG(1:3)
++      INTEGER :: dX,dY,dZ
++      REAL(8),ALLOCATABLE:: CH_GAUSS(:,:,:)
++      INTEGER :: ATOMPOS(3,T_INFO%NIONS)
++      CHARACTER*40 FORM                 
++
++      ALLOCATE(CH_GAUSS(GRID%NGX,GRID%NGY,GRID%NGZ))
++      CH_GAUSS=0._q
++
++      NG = (/GRID%NGX,GRID%NGY,GRID%NGZ/) 
++
++      !!! set the width of spreading      
++      NWIDTH=NINT(MIN(GRID%NGX,GRID%NGY,GRID%NGZ)/5._q)
++!     write(9630,*)'Gaussian NWIDTH=',NWIDTH
++
++      !!! locate atoms on mesh
++      DO NI=1,T_INFO%NIONS
++       DO I=1,3
++         ATOMPOS(I,NI)=NINT(DYN%POSION(I,NI)*NG(I))+1
++         IF (ATOMPOS(I,NI) .gt. NG(I)) THEN
++                 ATOMPOS(I,NI) = ATOMPOS(I,NI)-NG(I)
++         END IF     
++       ENDDO
++       DO IGX=ATOMPOS(1,NI)-NWIDTH,ATOMPOS(1,NI)+NWIDTH
++           dX=ABS(ATOMPOS(1,NI)-IGX)
++           CALL EDM_PBC(IGX,JGX,GRID%NGX)
++       DO IGY=ATOMPOS(2,NI)-NWIDTH,ATOMPOS(2,NI)+NWIDTH
++           dY=ABS(ATOMPOS(2,NI)-IGY)
++           CALL EDM_PBC(IGY,JGY,GRID%NGY)
++       DO IGZ=ATOMPOS(3,NI)-NWIDTH,ATOMPOS(3,NI)+NWIDTH
++           dZ=ABS(ATOMPOS(3,NI)-IGZ)
++           CALL EDM_PBC(IGZ,JGZ,GRID%NGZ)
++           IF(dX .eq. 0 .and. dY .eq. 0 .and. dZ .eq. 0) THEN
++           CH_GAUSS(JGX,JGY,JGZ)=1.E+03*2._q
++           ELSE
++           CH_GAUSS(JGX,JGY,JGZ)=1.E+03/SQRT((dX**2+dY**2+dZ**2)*1._q)
++           ENDIF
++       ENDDO        
++       ENDDO   
++       ENDDO
++      ENDDO
++      
++      IU=5425     
++
++      OPEN(UNIT=IU, FILE='EDM_CHGAUSS', STATUS='UNKNOWN')
++      CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++    &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++    &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++      FORM='(1(1X,E17.11))'
++      NWRITE=5
++      WRITE(IU,'(3I5)')GRID%NGX,GRID%NGY,GRID%NGZ
++      NWRITTEN=0
++      DO NZ=1,GRID%NGZ
++       DO NY=1,GRID%NGY
++        DO NX=1,GRID%NGX
++           NWRITTEN=NWRITTEN+1
++           IF (MOD(NWRITTEN,NWRITE)==0) THEN
++              WRITE(IU,FORM) CH_GAUSS(NX,NY,NZ)
++           ELSE
++              WRITE(IU,FORM,ADVANCE='NO') CH_GAUSS(NX,NY,NZ)
++           ENDIF
++        ENDDO   
++       ENDDO  
++      ENDDO
++      IF ( MOD(NWRITTEN,NWRITE)/=0 ) WRITE(IU,*)''
++      CLOSE(IU)
++      DEALLOCATE(CH_GAUSS)
++
++      END SUBROUTINE
++
++      SUBROUTINE EDM_PBC(IG,JG,NG)
++
++      INTEGER :: IG,JG,NG
++
++           IF(IG .le. 0) THEN 
++                   JG = IG + NG
++           ELSE IF(IG .gt. NG) THEN 
++                   JG = IG - NG 
++           ELSE
++                   JG = IG 
++           ENDIF
++           
++      END SUBROUTINE    
++
++
+diff -udNr vasp.4.6.36/EDM.inc vasp.4.6.36-edm/EDM.inc
+--- vasp.4.6.36/EDM.inc	1969-12-31 18:00:00.000000000 -0600
++++ vasp.4.6.36-edm/EDM.inc	2011-05-20 23:38:51.000000000 -0500
+@@ -0,0 +1,10 @@
++!Energy Density Method include data type
++!for VASP4.6.36
++
++      TYPE EDen
++       REAL(q), POINTER :: excLDA(:),excGGA(:)
++       REAL(q), POINTER :: RHOIJ(:,:,:)    
++       REAL(q), POINTER :: RHO_hatD(:),RHO_hatDDion(:),RHO_D(:) 
++       REAL(q), POINTER :: DOUBLEC_AE(:),DOUBLEC_PS(:)
++       REAL(q), POINTER :: Enl(:)     !non-local energy       
++      END TYPE
+diff -udNr vasp.4.6.36/Makefile vasp.4.6.36-edm/Makefile
+--- vasp.4.6.36/Makefile	2011-07-21 00:09:41.761714731 -0500
++++ vasp.4.6.36-edm/Makefile	2011-07-21 17:39:58.542398408 -0500
+@@ -202,6 +202,7 @@
+ #-----------------------------------------------------------------------
+ 
+ CPP    = $(CPP_) -DMPI  -DHOST=\"LinuxIFC_MPI\" -DIFC \
++     -DSUPPORT_EDM -DSUPPORT_EDM_paw -DSUPPORT_EDM_GGA\
+      -Dkind8 -DNGZhalf -DCACHE_SIZE=4000 -Davoidalloc \
+      -DMPI_BLOCK=500  \
+      -Duse_cray_ptr
+@@ -257,19 +258,20 @@
+          pseudo.o   mgrid.o    mkpoints.o wave.o      wave_mpi.o  $(BASIC) \
+          nonl.o     nonlr.o    dfast.o    choleski2.o    \
+          mix.o      charge.o   xcgrad.o   xcspin.o    potex1.o   potex2.o  \
+-         metagga.o  constrmag.o pot.o      cl_shift.o force.o    dos.o      elf.o      \
++         metagga.o  constrmag.o  relativistic.o LDApU.o  cl_shift.o \
++         paw.o  fileio.o  pot.o  force.o  dos.o      \
+          tet.o      hamil.o    steep.o    \
+-         chain.o    dyna.o     relativistic.o LDApU.o sphpro.o  paw.o   us.o \
++         chain.o    dyna.o     sphpro.o  us.o \
+          ebs.o      wavpre.o   wavpre_noio.o broyden.o \
+-         dynbr.o    rmm-diis.o reader.o   writer.o   tutor.o xml_writer.o \
+-         brent.o    stufak.o   fileio.o   opergrid.o stepver.o  \
++         dynbr.o    rmm-diis.o  reader.o  writer.o   tutor.o  xml_writer.o  \
++         brent.o    stufak.o   opergrid.o stepver.o  \
+          dipol.o    xclib.o    chgloc.o   subrot.o   optreal.o   davidson.o \
+-         edtest.o   electron.o shm.o      pardens.o  paircorrection.o \
+-         optics.o   constr_cell_relax.o   stm.o    finite_diff.o \
+-         elpol.o    setlocalpp.o aedens.o
+- 
++         edtest.o   shm.o      pardens.o  paircorrection.o \
++         optics.o   constr_cell_relax.o   stm.o    finite_diff.o  \
++         elpol.o    setlocalpp.o   aedens.o  EDM.o  elf.o  electron.o
++
+ INC=
+-TARGET=vasp.mpi
++TARGET=vasp.mpi.PAWGGA
+ 
+ $(TARGET): $(SOURCE) $(FFT3D) $(INC) main.o 
+ 	rm -f $(TARGET)
+@@ -305,7 +307,7 @@
+ # if one strucuture is changed then touch_dep must be called
+ # with the corresponding name of the structure
+ #
+-base.o: base.inc base.F
++base.o: base.inc EDM.inc base.F
+ mgrid.o: mgrid.inc mgrid.F
+ constant.o: constant.inc constant.F
+ lattice.o: lattice.inc lattice.F
+diff -udNr vasp.4.6.36/README_EDM vasp.4.6.36-edm/README_EDM
+--- vasp.4.6.36/README_EDM	1969-12-31 18:00:00.000000000 -0600
++++ vasp.4.6.36-edm/README_EDM	2011-05-20 20:08:25.000000000 -0500
+@@ -0,0 +1,57 @@
++Energy Density Method
++======================================================================
++Min Yu                               minyu2@illinois.edu
++
++======================================================================
++Makefile: 
++vasp.mpi.PAWGGA: -DSUPPORT_EDM -DSUPPORT_EDM_paw -DSUPPORT_EDM_GGA  
++vasp.mpi.USLDA: -DSUPPORT_EDM -DSUPPORT_EDM_uspp -DSUPPORT_EDM_LDA  
++
++INCAR: use all of following flags
++LELF = .TRUE.
++NPAR = 1
++LAECHG = .TRUE. (only for PAW)
++NGX=NGXF NGY=NGYF NGZ=NGZF (current modification requires)
++
++
++mpirun -np 40 -q 0 ~/vasp.4.6.36-edm/vasp.mpi.USGGA 
++
++1.  OUTCAR: contains Ta, EXC, ECC integration and Enl per ion for every interation
++
++##In the following, all the files beginning with 'EDM_' are written in CHGCAR format. 
++
++2.  EDM_Ta: Kinetic energy density calculated using asymmetric form
++
++3.  EDM_Tc: Kinetic energy density correction, difference of asymmetric and symmetric form
++
++4.  EDM_exc: XC energy density
++
++5.  EDM_VCCCAR: Total classical Coulomb potential*(-1), (local pseudo-potential+ Hartree potential)
++                              used to define charge neutral volumes. 
++6.  EDM_VloCAR: Local pseudo-potential
++
++7.  EDM_VhCAR: Hartree potential
++
++8.  EDM_VmodCAR: Model potential
++
++9.  EDM_neCAR: Valence electron = CHGCAR
++
++10. EDM_nmodCAR: Model charge density
++
++11. EDM_CHDEN: Soft pseudo-charge density used to define Bader volumes.  (for PAW)
++
++12. EDM_CHGAUSS: Gaussian functional charge density used for USPP ions where EDM_CHGAUSS is added into EDM_CHDEN to define Bader volumes for individual ions.
++~/vasp-tools/vtstscripts/chgsum.pl EDM_CHDEN EDM_CHGAUSS    (for USPP)
++
++13. EDM_VnCAR: Total classical Coulomb energy density                  
++
++bader EDM_Ta -ref EDM_CHDEN : gives atomic kinetic energy 
++
++bader EDM_Tc -ref EDM_CHDEN : gives kinetic energy integation error
++
++bader EDM_exc -ref EDM_CHDEN : gives atomic xc energy
++
++bader EDM_VnCAR -ref EDM_VCCCAR : gives atomic classic Coulomb energy
++
++and nonlocal pseudo potential energy per atom is given in OUTCAR.
++
+diff -udNr vasp.4.6.36/base.F vasp.4.6.36-edm/base.F
+--- vasp.4.6.36/base.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/base.F	2011-07-21 17:44:50.000000000 -0500
+@@ -29,8 +29,17 @@
+ 
+       END MODULE
+ 
++#ifdef SUPPORT_EDM
++      MODULE EDenM
++      USE prec
++      INCLUDE "EDM.inc"
++      CONTAINS
++      SUBROUTINE Ta
++      END SUBROUTINE
+ 
+ 
++      END MODULE
++#endif
+ 
+ 
+ 
+diff -udNr vasp.4.6.36/electron.F vasp.4.6.36-edm/electron.F
+--- vasp.4.6.36/electron.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/electron.F	2011-07-21 17:44:50.000000000 -0500
+@@ -16,7 +16,11 @@
+           CDIJ,CQIJ,CRHODE,N_MIX_PAW,RHOLM,RHOLM_LAST, &
+           CHDEN,SV,DOS,DOSI,DESUM,XCSIF, &
+           NSTEP,NELMLS,LMDIM,NIOND,IRDMAX,NBLK,NEDOS, &
++#ifdef SUPPORT_EDM
++          TOTEN,TOTENL,EFERMI,LDIMP,LMDIMP,LTRUNC,EDM)
++#else
+           TOTEN,TOTENL,EFERMI,LDIMP,LMDIMP,LTRUNC)
++#endif
+ 
+       USE prec
+       USE charge
+@@ -62,6 +66,9 @@
+ !-MM- Added for writing LDA+U occupancies
+       USE LDAPLUSU_MODULE
+ !-MM- end of additions
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
+ 
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+@@ -98,7 +105,10 @@
+       TYPE (dipol)       DIP
+       TYPE (energy)      E,E2
+       TYPE (latt)        LATT_INI
+-     
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
++
+       INTEGER NSTEP,NELMLS,LMDIM,NIOND,IRDMAX,NBLK,NEDOS
+       REAL(q) TOTEN,TOTENL,EFERMI
+ 
+@@ -112,6 +122,10 @@
+       OVERLAP  CDIJ(LMDIM,LMDIM,WDES%NIONS,WDES%NCDIJ), &
+                CQIJ(LMDIM,LMDIM,WDES%NIONS,WDES%NCDIJ), &
+                CRHODE(LMDIM,LMDIM,WDES%NIONS,WDES%NCDIJ)
++#ifdef SUPPORT_EDM
++      OVERLAP  EDM_CRHODE(LMDIM,LMDIM,WDES%NIONS,WDES%NCDIJ)
++      COMPLEX(q) CWORK(GRID_SOFT%MPLWV,WDES%NCDIJ)
++#endif
+ !---- needed temporary for aspherical GGA calculation 
+       OVERLAP,ALLOCATABLE ::  CDIJ_TMP(:,:,:,:)
+ !-----paw sphere charge density
+@@ -125,6 +139,9 @@
+       REAL(q)    DOS(NEDOS,WDES%ISPIN),DOSI(NEDOS,WDES%ISPIN)
+ !-----local l-projected wavefunction characters (not really used here)
+       REAL(q)    PAR(1,1,1,1,1),DOSPAR(1,1,1,1)
++!  all-band-simultaneous-update arrays
++      GDEF       CHF(WDES%NB_TOT,WDES%NB_TOT,WDES%NKPTS), &
++                 CHAM(WDES%NB_TOT,WDES%NB_TOT,WDES%NKPTS)
+ !----- energy at each step
+       REAL(q)   DESUM(500)
+       REAL(q)   XCSIF(3,3),DESUM1
+@@ -148,6 +165,9 @@
+       INTEGER :: LDIMP,LMDIMP,LTRUNC
+       REAL(q),ALLOCATABLE:: PAR_DUMMY(:,:,:,:,:)
+ 
++#ifdef SUPPORT_EDM
++      INTEGER NI,NIP,CH1,CH2
++#endif                  
+ !R.S
+       integer tiu6, tiu0, tiuvtot
+         tiu6 = IO%IU6
+@@ -225,7 +245,11 @@
+       IF (.NOT. INFO%LPOTOK) THEN
+       CALL POTLOK(GRID,GRIDC,GRID_SOFT, WDES%COMM_INTER, WDES, &
+                   EXCTAB,INFO,P,T_INFO,E,LATT_CUR,DIP, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF,EDM,DYN)
++#else
+                   CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF)
++#endif
+       CALL VTIME(TV,TC)
+       IF (IO%NWRITE>=2.AND.IO%IU6>=0) WRITE(TIU6,2300)'POTLOK',TV-TV0,TC-TC0
+       DWRITE0 'potlok is ok'
+@@ -233,11 +257,72 @@
+       CALL VTIME(TV0,TC0)
+ 
+       CALL SETDIJ(WDES,GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO,INFO%LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q,EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q)
++#endif
++
++#ifdef SUPPORT_EDM
++     EDM_CRHODE=CRHODE
++#ifdef SUPPORT_EDM_uspp
++      CALL DEPSUM(W,WDES,LMDIM,EDM_CRHODE,.TRUE.)
++do_io write(IO%IU6,*)'ION   NONLOCAL PP ENERGY --- USPP'
++#endif
++
++      EDM%RHO_hatD = 0
++      EDM%RHO_hatDDion = 0
++      EDM%Enl  = 0
++      DO NI=1,WDES%NIONS
++      DO CH1=1,LMDIM
++      DO CH2=1,LMDIM
++      NIP = NI_GLOBAL(NI,WDES%COMM_INB)
++      EDM%RHO_hatD(NI)=EDM%RHO_hatD(NI)+EDM%RHOIJ(CH1,CH2,NIP)*REAL(EDM_CRHODE(CH1,CH2,NI,1),KIND=q)
++      EDM%RHO_hatDDion(NI)=EDM%RHO_hatDDion(NI)+REAL(CDIJ(CH1,CH2,NI,1),KIND=q)*REAL(EDM_CRHODE(CH1,CH2,NI,1),KIND=q)
++      ENDDO
++      ENDDO
++      ENDDO
++
++#ifdef SUPPORT_EDM_uspp
++      DO NI=1,WDES%NIONS
++      NIP = NI_GLOBAL(NI,WDES%COMM_INB)
++      EDM%Enl(NIP) = -EDM%RHO_hatD(NI)+EDM%RHO_hatDDion(NI)
++      ENDDO
++      CALLMPI( M_sum_d(GRID%COMM, EDM%Enl, T_INFO%NIONS))
++io_begin
++      DO NI=1,T_INFO%NIONS
++      write(IO%IU6,'(I4,4X,1(E17.11,1X))')NI, EDM%Enl(NI)
++      ENDDO 
++io_end
++#endif
++
++#endif
++
++
+ #ifndef noPAW
+       CALL SET_DD_PAW(WDES, P , T_INFO, INFO%LOVERL, &
+          WDES%NCDIJ, LMDIM, CDIJ(1,1,1,1),  RHOLM, CRHODE(1,1,1,1), INFO%LEXCH, INFO%LEXCHG, &
++#ifdef SUPPORT_EDM
++         E, EDM, LMETA=.FALSE., LASPH=.FALSE., LCOREL= .FALSE.  )
++#else
+          E,  LMETA=.FALSE., LASPH=.FALSE., LCOREL= .FALSE.  )
++#endif
++
++#ifdef SUPPORT_EDM_paw
++do_io write(IO%IU6,*)'ION   NONLOCAL PP ENERGY --- PAW'
++      DO NI=1,WDES%NIONS
++      NIP = NI_GLOBAL(NI,WDES%COMM_INB)
++      EDM%Enl(NIP) = -EDM%RHO_hatD(NI)+EDM%RHO_D(NI)&
++&             +EDM%DOUBLEC_AE(NIP)+EDM%DOUBLEC_PS(NIP) 
++      ENDDO
++      CALLMPI( M_sum_d(WDES%COMM, EDM%Enl, T_INFO%NIONS))
++io_begin
++      DO NI=1,T_INFO%NIONS    
++      write(IO%IU6,'(I4,4X,1(E17.11,1X))')NI, EDM%Enl(NI)
++      ENDDO
++io_end
++#endif
++
+ 
+ !      CALL TEST_DD_PAW(WDES, P , T_INFO, INFO%LOVERL, &
+ !         WDES%NCDIJ, LMDIM, CDIJ(1,1,1,1),  RHOLM, CRHODE(1,1,1,1), INFO%LEXCH, INFO%LEXCHG, &
+@@ -491,7 +576,11 @@
+          CALL SET_DD_PAW(WDES, P , T_INFO, INFO%LOVERL, &
+               WDES%NCDIJ, LMDIM, CDIJ_TMP(1,1,1,1), RHOLM,  &
+               CRHODE, INFO%LEXCH, INFO%LEXCHG, &
++#ifdef SUPPORT_EDM
++              E, EDM, INFO%LMETAGGA, INFO%LASPH, LCOREL=.FALSE.  )
++#else
+               E, INFO%LMETAGGA, INFO%LASPH, LCOREL=.FALSE. )
++#endif
+          DEALLOCATE(CDIJ_TMP)
+       ENDIF
+ ! ======================================================================
+@@ -507,7 +596,11 @@
+          CALL SET_DD_PAW(WDES, P , T_INFO, INFO%LOVERL, &
+               WDES%NCDIJ, LMDIM, CDIJ_TMP(1,1,1,1), RHOLM,  &
+               CRHODE, INFO%LEXCH, INFO%LEXCHG, &
++#ifdef SUPPORT_EDM
++              E, EDM, LMETA= .FALSE. , LASPH=.FALSE. , LCOREL=.TRUE.  )
++#else
+               E, LMETA= .FALSE. , LASPH=.FALSE. , LCOREL=.TRUE. )
++#endif
+          DEALLOCATE(CDIJ_TMP)
+       ENDIF
+ !-----------------------------------------------------------------------
+@@ -535,7 +628,24 @@
+       ENDIF
+       IF (INFO%LABORT .AND. INFO%LMETAGGA) &
+               E%TOTENMGGA=TOTEN-E%EXCG-E%PAWPSG-E%PAWAEG+E%EXCM+E%PAWPSM+E%PAWAEM
+-     
++#ifdef SUPPORT_EDM
++      CALL ELF(GRID,GRID_SOFT,LATT_CUR,SYMM,NIOND, W,WDES,  &
++               CHDEN,CWORK,T_INFO,DYN,INFO,IO)
++      io_begin
++      OPEN(UNIT=53,FILE='EDM_Tc',STATUS='UNKNOWN')
++      CALL OUTPOS(53,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A,T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++     &                  T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++      io_end
++      DO ISP=1,WDES%NCDIJ
++         CALL OUTCHG(GRID_SOFT,53,.TRUE.,CWORK(1,ISP))
++      ENDDO
++      do_io CLOSE(53)
++
++      CALL EDM_XC(GRIDC,LATT_CUR,T_INFO,DYN,INFO,IO,WDES,EDM)
++      do_io CALL EDM_VnCC(GRIDC,LATT_CUR,T_INFO,DYN,INFO,IO, 'EDM_VloCAR','EDM_VhCAR','EDM_VmodCAR', &
++     &        'EDM_neCAR','EDM_nmodCAR','EDM_VnCAR')
++#endif
++   
+ !========================= subroutine CHSP  ============================
+ ! if charge density is updated
+ !  ) first copy current charge to CHTOTL
+diff -udNr vasp.4.6.36/elf.F vasp.4.6.36-edm/elf.F
+--- vasp.4.6.36/elf.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/elf.F	2011-07-21 17:44:50.000000000 -0500
+@@ -10,7 +10,12 @@
+ !
+ !***********************************************************************
+       SUBROUTINE ELF(GRID,GRID_SOFT,LATT_CUR,SYMM,NIOND, W,WDES,  &
++#ifdef SUPPORT_EDM
++               CHDEN,CELF,T_INFO,DYN,INFO,IO)
++#else
+                CHDEN,CELF)
++#endif
++
+        USE prec
+        USE msymmetry
+        USE base
+@@ -19,6 +24,10 @@
+        USE mgrid
+        USE wave
+        USE constant
++#ifdef SUPPORT_EDM
++       USE fileio
++       USE poscar
++#endif
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+ 
+@@ -27,6 +36,12 @@
+       TYPE (symmetry)    SYMM
+       TYPE (wavespin)    W
+       TYPE (wavedes)     WDES
++#ifdef SUPPORT_EDM
++      TYPE (type_info)   T_INFO
++      TYPE (dynamics)    DYN
++      TYPE (info_struct) INFO
++      TYPE (in_struct)   IO
++#endif
+ ! final resul
+       COMPLEX(q)   CELF(GRID_SOFT%MPLWV,WDES%NCDIJ), &
+                    CHDEN(GRID_SOFT%MPLWV,WDES%NCDIJ)
+@@ -35,6 +50,9 @@
+       COMPLEX(q),ALLOCATABLE :: CR(:),CR2(:)
+       RGRID,     ALLOCATABLE :: CDWORK(:),CNEW(:)
+ 
++#ifdef SUPPORT_EDM 
++      RGRID,     ALLOCATABLE :: EDM_eTa(:)
++#endif
+ ! the compaq F90 compiler has a funny bug that needs this crazy workaround
+ ! dont ask why, it took me quite a while to find this workaround anyway
+       INTEGER DECSYMM
+@@ -50,6 +68,19 @@
+       MPLWV=MAX(GRID%MPLWV,GRID_SOFT%MPLWV)
+       ALLOCATE(CDWORK(DIMREAL(MPLWV)),CNEW(DIMREAL(MPLWV)), &
+                CR(MPLWV),CR2(MPLWV))
++#ifdef SUPPORT_EDM
++      ALLOCATE(EDM_eTa(DIMREAL(MPLWV)))
++#endif
++
++#ifdef MPI
++      NODE_ME=GRID_SOFT%COMM%NODE_ME
++      IONODE =GRID_SOFT%COMM%IONODE
++      IDUMP=0
++#else
++      NODE_ME=0
++      IONODE =0
++      IDUMP=0
++#endif
+ 
+ !=======================================================================
+ !    first recalculate charge-density (propably not really necessary)
+@@ -140,6 +171,14 @@
+         CALL FFT3RC(CDWORK,GRID_SOFT,1)
+       ENDIF
+ 
++#ifdef SUPPORT_EDM
++     EDM_eTa = 0
++     DO I = 1, GRID_SOFT%RL%NP
++     EDM_eTa(I) = CDWORK(I) * LATT_CUR%OMEGA  !/GRID_SOFT%NPLWV
++     ENDDO
++     CALL EDM_Ta(GRID,LATT_CUR,T_INFO,DYN,INFO,IO,EDM_eTa,'EDM_Ta')
++#endif
++
+ !=======================================================================
+ ! calculate |grad rho|^2
+ ! :: CNEW
+@@ -210,8 +249,12 @@
+ 
+ !=======================================================================
+ !  calculate ELF (Nature, 371(1994)683-686)
++!####ifdef SUPPORT_EDM return Tcorr>>CDWORK>>CELF 
+ !=======================================================================
+       CALL ELFCAL(CHDEN(1,ISP),CR,CDWORK,CNEW,GRID_SOFT)
++ #ifdef SUPPORT_EDM
++      CDWORK = CDWORK*LATT_CUR%OMEGA
++ #endif     
+ 
+ ! Fourier-Transformation of ELF to real space
+       CALL FFT_RC_SCALE(CDWORK,CELF(1,ISP),GRID_SOFT)
+@@ -219,6 +262,9 @@
+ 
+       DEALLOCATE(CDWORK,CR,CR2,CNEW)
+ 
++#ifdef SUPPORT_EDM
++      DEALLOCATE(EDM_eTa)
++#endif
+       RETURN
+       END SUBROUTINE
+       END MODULE melf
+@@ -284,6 +330,10 @@
+           DH = 0.2_q*HSQDTM/PISQ* (3*PISQ* REAL( CHDEN(N) ,KIND=q) )**FIVTHI
+        ENDIF
+        CKINE(N)=1/(1+((T+TCORR-TBOS)/MAX(DH,1E-8_q))**2)
++#ifdef SUPPORT_EDM
++       CKINE(N)=TCORR            !write out Tc 
++!       CKINE(N)=REAL(T,KIND=q)   !write out Ta
++#endif
+       ENDDO
+ 
+       RETURN
+diff -udNr vasp.4.6.36/force.F vasp.4.6.36-edm/force.F
+--- vasp.4.6.36/force.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/force.F	2011-07-21 17:44:50.000000000 -0500
+@@ -356,9 +356,12 @@
+ !***********************************************************************
+ 
+       SUBROUTINE CHGGRA(GRIDC,LATT_CUR,EXCTAB, &
++#ifdef SUPPORT_EDM
++     &     CHGGA,CHTOT,CHTOTL,DENCOR,EDM)
++#else
+      &     CHGGA,CHTOT,CHTOTL,DENCOR)
++#endif
+       USE prec
+-
+       USE mpimy
+       USE mgrid
+       USE lattice
+@@ -366,6 +369,10 @@
+       USE xcgrad
+       USE charge
+       USE pot
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
++
+       IMPLICIT COMPLEX(q) (C)
+ 
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+@@ -373,6 +380,9 @@
+       TYPE (grid_3d)     GRIDC
+       TYPE (exctable)    EXCTAB
+       TYPE (latt)        LATT_CUR
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+       COMPLEX(q)  CHTOT(GRIDC%RC%NP),CHTOTL(GRIDC%RC%NP)
+       COMPLEX(q)  CHGGA(GRIDC%MPLWV)
+@@ -395,7 +405,12 @@
+ !  calculate the gradient of the exchange correlation potential
+ !-----------------------------------------------------------------------
+       CALL FEXCP(EXCTAB,GRIDC,LATT_CUR%OMEGA, &
++#ifdef SUPPORT_EDM
++             CHGGA,DENCOR,CWORK1,DWORK2,CVZERO,EXC,XCENC,TMPSIF,.FALSE.,EDM)
++#else
+              CHGGA,DENCOR,CWORK1,DWORK2,CVZERO,EXC,XCENC,TMPSIF,.FALSE.)
++#endif
++
+ !-----------------------------------------------------------------------
+ !  calculate difference between output and input charge-density in
+ !  real space -> store result in CHGGA
+diff -udNr vasp.4.6.36/main.F vasp.4.6.36-edm/main.F
+--- vasp.4.6.36/main.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/main.F	2011-07-21 17:44:50.000000000 -0500
+@@ -142,6 +142,9 @@
+ !-MM- Added to write AE charge densities
+       USE aedens
+ !-MM_ end of additions
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+ 
+@@ -156,7 +159,8 @@
+ !            direction that can be stored in the 'connection'
+ !            tables for the k-points used for the symmetry
+ !            reduction of the tetrahedron tiling. Finally
+-      INTEGER, PARAMETER :: NKDIMD=10000,NTETD=90000,IKPTD=45
++!      INTEGER, PARAMETER :: NKDIMD=10000,NTETD=90000,IKPTD=45
++       INTEGER, PARAMETER :: NKDIMD=131072,NTETD=262144,IKPTD=128
+ !----I/O-related things (adapt on installation or for special purposes)
+ !     IU6    overall output ('console protocol'/'OUTCAR' I/O-unit)
+ !     IU0    very important output ('standard [error] output I/O-unit')
+@@ -204,6 +208,9 @@
+       TYPE (smear_struct) SMEAR_LOOP
+       TYPE (paco_struct) PACO
+       TYPE (energy)      E,E2
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM 
++#endif
+ 
+       INTEGER :: NGX,NGY,NGZ,NGXC,NGYC,NGZC
+       INTEGER :: NRPLWV,NBLK,LDIM,LMDIM,LDIM2,LMYDIM
+@@ -2136,9 +2143,16 @@
+ ! then performe an orthogonalisation of the wavefunctions
+ !=======================================================================
+ !-----first call SETDIJ to set the array CQIJ
++#ifdef SUPPORT_EDM
++      ALLOCATE(EDM%RHOIJ(LMDIM,LMDIM,T_INFO%NIONS))
++#endif 
+ 
+       CALL SETDIJ(WDES,GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO,INFO%LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q,EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q)
++#endif
+ 
+       DWRITE0 'setdij done'
+ 
+@@ -2323,7 +2337,15 @@
+ !***********************************************************************
+ !***********************************************************************
+       CALL XML_TAG("calculation")
+-
++#ifdef SUPPORT_EDM
++      ALLOCATE(EDM%RHO_hatD(WDES%NIONS),EDM%RHO_hatDDion(WDES%NIONS),EDM%RHO_D(WDES%NIONS))
++      ALLOCATE(EDM%DOUBLEC_AE(T_INFO%NIONS),EDM%DOUBLEC_PS(T_INFO%NIONS))
++      ALLOCATE(EDM%Enl(T_INFO%NIONS))
++      ALLOCATE(EDM%excLDA(GRIDC%RL%NP))
++#ifdef SUPPORT_EDM_GGA 
++      ALLOCATE(EDM%excGGA(GRIDC%RL%NP))
++#endif 
++#endif 
+       CALL ELMIN( &
+           P,WDES,NONLR_S,NONL_S,W,W_F,W_G,WUP,WDW,LATT_CUR,LATT_INI,EXCTAB, &
+           T_INFO,DYN,INFO,IO,MIX,KPOINTS,SYMM,GRID,GRID_SOFT, &
+@@ -2332,7 +2354,11 @@
+           CDIJ,CQIJ,CRHODE,N_MIX_PAW,RHOLM,RHOLM_LAST, &
+           CHDEN,SV,DOS,DOSI,DESUM,XCSIF, &
+           NSTEP,NELMLS,LMDIM,NIOND,IRDMAX,NBLK,NEDOS, &
++#ifdef SUPPORT_EDM
++          TOTEN,TOTENL,EFERMI,LDIMP,LMDIMP,LTRUNC,EDM)
++#else
+           TOTEN,TOTENL,EFERMI,LDIMP,LMDIMP,LTRUNC)
++#endif
+ 
+       
+ !  'soft stop': stop after the next ionic step finished
+@@ -2427,14 +2453,26 @@
+ 
+       CALL POTLOK(GRID,GRIDC,GRID_SOFT, WDES%COMM_INTER, WDES,  &
+                   EXCTAB,INFO,P,T_INFO,E,LATT_CUR,DIP, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF,EDM, DYN)
++#else
+                   CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF)
++#endif
+ 
+       CALL SETDIJ(WDES,GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO,INFO%LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q,EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q)
++#endif
+ 
+       CALL SET_DD_PAW(WDES, P , T_INFO, INFO%LOVERL, &
+          WDES%NCDIJ, LMDIM, CDIJ, RHOLM, CRHODE, INFO%LEXCH, INFO%LEXCHG, &
++#ifdef SUPPORT_EDM
++          E, EDM, LMETA =  .FALSE., LASPH =.FALSE. , LCOREL=.FALSE.)
++#else
+           E, LMETA =  .FALSE., LASPH =.FALSE. , LCOREL=.FALSE.)
++#endif
+ 
+ 
+       CALL VTIME(TV,TC)
+@@ -2527,7 +2565,12 @@
+       IF (INFO%LOVERL) &
+       CALL FORDEP(WDES, GRIDC,GRIDUS,C_TO_US, &
+          LATT_CUR,P,T_INFO, INFO%LOVERL, &
++#ifdef SUPPORT_EDM
++         LMDIM, CDIJ, CQIJ,CRHODE, CVTOT, IRDMAX, EINL,EDM)
++#else
+          LMDIM, CDIJ, CQIJ,CRHODE, CVTOT, IRDMAX, EINL)
++#endif
++
+       CALL VTIME(TV,TC)
+       IF (SYMM%ISYM>0) &
+            CALL FORSYM(EINL,SYMM%ROTMAP,T_INFO%NTYP,T_INFO%NITYP,NIOND,SYMM%TAUROT,SYMM%WRKROT,LATT_CUR%A)
+@@ -2536,7 +2579,11 @@
+       CALL SET_DD_PAW(WDES, P , T_INFO, INFO%LOVERL, &
+            WDES%NCDIJ, LMDIM, CDIJ(1,1,1,1), RHOLM,  &
+            CRHODE, INFO%LEXCH, INFO%LEXCHG, &
++#ifdef SUPPORT_EDM
++           E, EDM, LMETA =  .FALSE., LASPH =.FALSE. , LCOREL=.FALSE. )
++#else
+            E, LMETA =  .FALSE., LASPH =.FALSE. , LCOREL=.FALSE. )
++#endif
+ !------------------- STRESS ON UNIT CELL -------------------------------
+ ! calculate the stress on the unit cell which is related
+ ! to the change in local pseudopotential on changing the size of
+@@ -2569,7 +2616,12 @@
+       IF (INFO%LOVERL) &
+       CALL STRDEP(WDES, GRIDC,GRIDUS,C_TO_US, &
+        LATT_CUR,P,T_INFO, INFO%LOVERL, &
++#ifdef SUPPORT_EDM
++       LMDIM,CDIJ,CQIJ,CRHODE, CVTOT, IRDMAX, DYN%ISIF,AUGSIF,EDM)
++#else
+        LMDIM,CDIJ,CQIJ,CRHODE, CVTOT, IRDMAX, DYN%ISIF,AUGSIF)
++#endif
++
+       CALL VTIME(TV,TC)
+       IF (IO%NWRITE>=2.AND.IO%IU6>=0) WRITE(TIU6,2300)'STRESS',TV-TV0,TC-TC0
+ 
+@@ -2589,7 +2641,11 @@
+        CALL VTIME(TV0,TC0)
+ 
+ 
++#ifdef SUPPORT_EDM
++       CALL POTXC(EXCTAB,GRIDC,INFO,WDES, LATT_CUR, CVTOT(1,1),CHTOT(1,1),DENCOR,EDM)
++#else
+        CALL POTXC(EXCTAB,GRIDC,INFO,WDES, LATT_CUR, CVTOT(1,1),CHTOT(1,1),DENCOR)
++#endif
+        CALL FORHAR(GRIDC,P,T_INFO,LATT_CUR, &
+              CVTOT,PARFOR,.TRUE.)
+ 
+@@ -2614,7 +2670,11 @@
+       IF (INFO%LCHCON.OR.INFO%LCORR) THEN
+       CALL VTIME(TV0,TC0)
+ 
++#ifdef SUPPORT_EDM
++      CALL CHGGRA(GRIDC,LATT_CUR,EXCTAB, CVTOT,CHTOT,CHTOTL,DENCOR,EDM)
++#else
+       CALL CHGGRA(GRIDC,LATT_CUR,EXCTAB, CVTOT,CHTOT,CHTOTL,DENCOR)
++#endif
+ 
+       CALL FORHAR(GRIDC,P,T_INFO,LATT_CUR, &
+              CVTOT,HARFOR,.FALSE.)
+@@ -3660,14 +3720,26 @@
+       WRITE(TIU0,*)'wavefunctions rotated'
+       CALL POTLOK(GRID,GRIDC,GRID_SOFT, WDES%COMM_INTER, WDES, &
+                   EXCTAB,INFO,P,T_INFO,E,LATT_CUR,DIP, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF,EDM, DYN)
++#else
+                   CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF)
++#endif
+ 
+       CALL SETDIJ(WDES,GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO,INFO%LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q,EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q)
++#endif
+ 
+       CALL SET_DD_PAW(WDES, P , T_INFO, INFO%LOVERL, &
+          WDES%NCDIJ, LMDIM, CDIJ,  RHOLM, CRHODE, INFO%LEXCH, INFO%LEXCHG, &
++#ifdef SUPPORT_EDM
++          E, EDM, LMETA =  .FALSE., LASPH =.FALSE. , LCOREL=.FALSE.)
++#else
+           E, LMETA =  .FALSE., LASPH =.FALSE. , LCOREL=.FALSE.)
++#endif
+ 
+       CALL VTIME(TV,TC)
+       IF (IO%NWRITE>=2.AND.IO%IU6>=0) WRITE(TIU6,2300)'POTLOK',TV-TV0,TC-TC0
+@@ -3858,11 +3930,16 @@
+      &                  T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
+          io_end
+ ! comment out the following line to add  exchange correlation
+-         INFO%LEXCHG=-1
++#ifdef SUPPORT_EDM
++!         INFO%LEXCHG=-1
++#endif
+          CALL POTLOK(GRID,GRIDC,GRID_SOFT, WDES%COMM_INTER, WDES, &
+                   EXCTAB,INFO,P,T_INFO,E,LATT_CUR,DIP, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF,EDM,DYN)
++#else
+                   CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF)
+-
++#endif
+          ! call the dipol routine without changing the potential
+          IF ( DIP%IDIPCO >0 ) THEN
+            DIP%LCOR_DIP=.FALSE.
+@@ -3947,6 +4024,15 @@
+         &         LMDIM,CRHODE, CHTOT,CHDEN, IRDMAX)
+       ENDIF
+ !-MM- end of addition
++#ifdef SUPPORT_EDM
++      OPEN(UNIT=53,FILE='EDM_CHDEN',STATUS='UNKNOWN')
++      io_begin
++      CALL OUTPOS(53,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A,T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++     &                  T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++      io_end
++         CALL OUTCHG(GRID_SOFT,53,.TRUE.,CHDEN)
++      CLOSE(53)
++#endif                                                                 
+ !=======================================================================
+ !  calculate ELF
+ !=======================================================================
+@@ -3954,22 +4040,43 @@
+       ALLOCATE(CWORK(GRID_SOFT%MPLWV,WDES%NCDIJ))
+ 
+       CALL ELF(GRID,GRID_SOFT,LATT_CUR,SYMM,NIOND, W,WDES,  &
++#ifdef SUPPORT_EDM
++               CHDEN,CWORK,T_INFO,DYN,INFO,IO)
++#else
+                CHDEN,CWORK)
++#endif
++
+ ! write ELF to file ELFCAR
+       io_begin
++#ifdef SUPPORT_EDM
++      OPEN(UNIT=53,FILE='EDM_Tc',STATUS='UNKNOWN')
++#else
+       OPEN(UNIT=53,FILE='ELFCAR',STATUS='UNKNOWN')
++#endif
+       CALL OUTPOS(53,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A,T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
+      &                  T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
+       io_end
+ 
+       DO ISP=1,WDES%NCDIJ
+-         CALL OUTCHG(GRID_SOFT,53,.FALSE.,CWORK(1,ISP))
++         CALL OUTCHG(GRID_SOFT,53,.TRUE.,CWORK(1,ISP))
+       ENDDO
+ 
+       DEALLOCATE(CWORK)
+ 
+       do_io CLOSE(53)
+       ENDIF
++      
++#ifdef SUPPORT_EDM
++      CALL EDM_XC(GRIDC,LATT_CUR,T_INFO,DYN,INFO,IO,WDES,EDM)
++      do_io CLOSE(18)
++      do_io CLOSE(62)
++      do_io CALL EDM_VnCC(GRIDC,LATT_CUR,T_INFO,DYN,INFO,IO,'EDM_VloCAR','EDM_VhCAR','EDM_VmodCAR',&
++&        'EDM_neCAR','EDM_nmodCAR','EDM_VnCAR')
++#endif
++
++#ifdef SUPPORT_EDM_uspp
++      do_io  CALL EDM_Gaussian(GRID,LATT_CUR,T_INFO,DYN,INFO)
++#endif      
+ !=======================================================================
+ !  STM calculation
+ !=======================================================================
+@@ -3982,7 +4089,6 @@
+       IF (WRITE_DENSITY()) CALL WR_PROJ_CHARG(GRID,P,LATT_CUR,T_INFO,WDES)
+       IF (LCALC_ORBITAL_MOMENT().AND.WDES%LNONCOLLINEAR) CALL WRITE_ORBITAL_MOMENT(WDES,T_INFO%NIONS,IO%IU6)
+ !-MM- end of addition
+-
+ !=======================================================================
+ !  calculate ion and lm decomposed occupancies and dos
+ !=======================================================================
+@@ -4126,7 +4232,11 @@
+       CALL VTIME(TV0,TC0)
+       CALL POTLOK(GRID,GRIDC,GRID_SOFT, WDES%COMM_INTER, WDES, &
+                   EXCTAB,INFO,P,T_INFO,E,LATT_CUR,DIP, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF,EDM,DYN)
++#else
+                   CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF)
++#endif
+       CALL VTIME(TV,TC)
+       IF (IUT>0) WRITE(IUT,2300)'POTLOK ',TV-TV0,TC-TC0
+ 
+@@ -4245,7 +4355,11 @@
+       CALL VTIME(TV0,TC0)
+ 
+       CALL SETDIJ(WDES,GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO,INFO%LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q,EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q)
++#endif
+ 
+       CALL VTIME(TV,TC)
+       IF (IUT>0) WRITE(IUT,2300)'SETDIJ ',TV-TV0,TC-TC0
+@@ -4253,7 +4367,11 @@
+       CALL VTIME(TV0,TC0)
+       CALL SET_DD_PAW(WDES, P , T_INFO, INFO%LOVERL, &
+          INFO%ISPIN, LMDIM, CDIJ,  RHOLM, CRHODE, INFO%LEXCH, INFO%LEXCHG, &
++#ifdef SUPPORT_EDM
++          E, EDM, LMETA =  .FALSE., LASPH =.FALSE. , LCOREL=.FALSE.)
++#else
+           E,  LMETA =  .FALSE., LASPH =.FALSE. , LCOREL=.FALSE.)
++#endif
+       CALL VTIME(TV,TC)
+       IF (IUT>0) WRITE(IUT,2300)'SETPAW ',TV-TV0,TC-TC0
+ 
+diff -udNr vasp.4.6.36/paw.F vasp.4.6.36-edm/paw.F
+--- vasp.4.6.36/paw.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/paw.F	2011-07-21 17:44:50.000000000 -0500
+@@ -1297,7 +1297,12 @@
+ 
+     SUBROUTINE SET_DD_PAW(WDES, P , T_INFO, LOVERL, &
+          ISPIN, LMDIM, CDIJ, RHOLM_STORE, CRHODE, LEXCH, LEXCHG, &
++#ifdef SUPPORT_EDM
++         E, EDM, LMETA, LASPH, LCOREL  )
++#else
+          E, LMETA, LASPH, LCOREL )
++#endif
++
+       USE pseudo
+       USE asa
+       USE poscar
+@@ -1308,6 +1313,10 @@
+       USE relativistic
+       USE LDAPLUSU_MODULE
+       USE cl
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
++
+       IMPLICIT NONE
+ 
+       TYPE (type_info) T_INFO
+@@ -1361,10 +1370,21 @@
+       INTEGER MAXNL
+       REAL(q), ALLOCATABLE :: W(:,:), EIG(:)
+       INTEGER, ALLOCATABLE :: N(:), LC(:)
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++      INTEGER NODE_ME, IONODE
++      INTEGER CH1,CH2
++      EDM%RHO_D = 0
++      EDM%DOUBLEC_AE = 0
++      EDM%DOUBLEC_PS = 0
++#ifdef MPI                                                    
++      NODE_ME=WDES%COMM%NODE_ME                               
++      IONODE =WDES%COMM%IONODE                                
++#endif       
++#endif                                          
+ !=======================================================================
+ ! quick return and allocation of work space
+ !=======================================================================
+-
+       DOUBLEC_AE=0
+       DOUBLEC_PS=0
+       E%PAWPSM=0; E%PAWAEM=0
+@@ -1713,7 +1733,11 @@
+          ! (remember our reference are the atoms)
+          DOUBLEC_PS= DOUBLEC_PS-DOUBLEPS
+          DOUBLEC_AE= DOUBLEC_AE+DOUBLEAE-PP%DEXCCORE
+-
++#ifdef SUPPORT_EDM_paw
++      EDM%DOUBLEC_PS(NI)=-DOUBLEPS
++      EDM%DOUBLEC_AE(NI)=DOUBLEAE-PP%DEXCCORE
++#endif      
++            
+   !-----------------------------------------------------------------------
+   ! calculate core level shift for up potential (collinear case) or
+   ! total potential (non collinear case, 
+@@ -1841,6 +1865,9 @@
+             ! handle the occupancies to the LDA+U code            
+             CALL LDAPLUSU(LMDIM,NI,NT,COCC, CTMP, PP, DOUBLEC_LDAU)
+             DOUBLEC_AE = DOUBLEC_AE + DOUBLEC_LDAU
++#ifdef SUPPORT_EDM_paw
++      EDM%DOUBLEC_AE(NI)=EDM%DOUBLEC_AE(NI) + DOUBLEC_LDAU
++#endif                        
+          ENDIF
+ !OBengone modify end           
+ 
+@@ -1876,7 +1903,21 @@
+          CALLMPI( M_sum_d(WDES%COMM, E%PAWPSAS, 1))
+          CALLMPI( M_sum_d(WDES%COMM, E%PAWAEAS, 1))
+       ENDIF
++#ifdef SUPPORT_EDM
++      CALLMPI( M_sum_d(WDES%COMM, EDM%DOUBLEC_AE, T_INFO%NIONS))
++      CALLMPI( M_sum_d(WDES%COMM, EDM%DOUBLEC_PS, T_INFO%NIONS))
+ 
++      DO NI=1,WDES%NIONS
++        DO CH1=1,LMDIM
++        DO CH2=1,LMDIM
++           EDM%RHO_D(NI)=EDM%RHO_D(NI)+ &
++&               REAL(CDIJ(CH1,CH2,NI,1),KIND=q)*REAL(CRHODE(CH1,CH2,NI,1),KIND=q)
++        ENDDO
++        ENDDO
++      ENDDO
++
++#endif
++                                                                              
+ #ifdef debug
+       DO K=1,WDES%COMM%NCPU
+       IF (WDES%COMM%NODE_ME == K) THEN
+diff -udNr vasp.4.6.36/pot.F vasp.4.6.36-edm/pot.F
+--- vasp.4.6.36/pot.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/pot.F	2011-07-21 17:44:50.000000000 -0500
+@@ -24,7 +24,12 @@
+ 
+       SUBROUTINE POTLOK(GRID,GRIDC,GRID_SOFT, COMM_INTER, WDES,  &
+                   EXCTAB,INFO,P,T_INFO,E,LATT_CUR, DIP, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF,EDM, DYN )
++#else
+                   CHTOT,CSTRF,CVTOT,DENCOR,SV, SOFT_TO_C,XCSIF )
++#endif
++
+       USE prec
+       USE mpimy
+       USE mgrid
+@@ -35,6 +40,11 @@
+       USE base
+       USE xcgrad
+       USE wave
++#ifdef SUPPORT_EDM
++      USE constant
++      USE fileio   !OUTCHG
++      USE edenm
++#endif
+ !-MM- changes to accomodate constrained moments
+       USE Constrained_M_modular
+ !-MM- end of addition
+@@ -53,6 +63,10 @@
+       TYPE (latt)        LATT_CUR
+       TYPE (dipol)       DIP
+       TYPE (communic)    COMM_INTER
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++      TYPE (dynamics)    DYN
++#endif
+ 
+       RGRID   SV(DIMREAL(GRID%MPLWV), WDES%NCDIJ)
+       COMPLEX(q) CSTRF(GRIDC%MPLWV,T_INFO%NTYP), &
+@@ -63,9 +77,27 @@
+       COMPLEX(q), ALLOCATABLE::  CWORK1(:),CWORK(:,:)
+       REAL(q) ELECTROSTATIC
+       LOGICAL, EXTERNAL :: L_NO_LSDA_GLOBAL
+-      
++#ifdef SUPPORT_EDM
++      COMPLEX(q),ALLOCATABLE:: EDM_Vh(:), EDM_ne(:),EDM_VCC(:)
++      COMPLEX(q),ALLOCATABLE:: EDM_Vloc(:)
++      COMPLEX(q),ALLOCATABLE:: EDM_Vmod(:), EDM_nmod(:) 
++      INTEGER :: IU
++      INTEGER :: N1,NC,N2,N3,NODE_ME,IONODE
++      REAL(q) :: GX,GY,GZ,GSQU,SCALE
++      ALLOCATE(EDM_Vh(GRIDC%MPLWV),EDM_ne(GRIDC%MPLWV),EDM_VCC(GRIDC%MPLWV))!,EDM_nCC(GRIDC%MPLWV))
++      ALLOCATE(EDM_Vloc(GRIDC%MPLWV))!,EDM_nloc(GRIDC%MPLWV))
++      ALLOCATE(EDM_Vmod(GRIDC%MPLWV),EDM_nmod(GRIDC%MPLWV))
++      #ifdef MPI
++           NODE_ME=GRIDC%COMM%NODE_ME
++           IONODE =GRIDC%COMM%IONODE
++      #else
++           NODE_ME=0
++           IONODE =0
++      #endif
++#endif      
+       MWORK1=MAX(GRIDC%MPLWV,GRID_SOFT%MPLWV)
+       ALLOCATE(CWORK1(MWORK1),CWORK(GRIDC%MPLWV,WDES%NCDIJ))
++   
+ !-----------------------------------------------------------------------
+ !
+ !  calculate the exchange correlation potential and the dc. correction
+@@ -141,12 +173,21 @@
+           IF (INFO%LEXCHG >0) THEN
+              ! gradient corrections to LDA
+              CALL FEXCG(INFO%LEXCHG,GRIDC,LATT_CUR,XCENCG,EXCG,CVZERG,TMPSIF, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CVTOT,DENCOR,EDM)
++#else
+                   CHTOT,CVTOT,DENCOR)
++#endif
+           ENDIF
+                 
+           ! LDA part of potential
+           CALL FEXCP(EXCTAB,GRIDC,LATT_CUR%OMEGA, &
++#ifdef SUPPORT_EDM
++               CHTOT,DENCOR,CVTOT,CWORK,E%CVZERO,EXC,E%XCENC,XCSIF,.TRUE.,EDM)
++#else
+                CHTOT,DENCOR,CVTOT,CWORK,E%CVZERO,EXC,E%XCENC,XCSIF,.TRUE.)
++#endif
++
+        ENDIF
+ 
+        XCSIF=XCSIF+TMPSIF
+@@ -213,6 +254,13 @@
+       DO I=1,GRIDC%RC%NP
+          CVTOT(I,1)=CVTOT(I,1)+CWORK(I,1)
+       ENDDO
++
++#ifdef SUPPORT_EDM       !!!Hartree potential
++     EDM_Vh = 0
++     DO I = 1, GRIDC%RC%NP
++     EDM_Vh(I) = CWORK(I,1)
++     END DO
++#endif
+ !-----------------------------------------------------------------------
+ !  add local pseudopotential potential
+ !-----------------------------------------------------------------------
+@@ -241,6 +289,98 @@
+       DO I=1,GRIDC%RC%NP
+          CVTOT(I,1)=CVTOT(I,1)+CWORK(I,1)
+       ENDDO
++
++#ifdef SUPPORT_EDM       !!!***Local pseudo potential
++     EDM_VCC = 0 
++     EDM_Vloc = 0
++     EDM_Vmod = 0
++     EDM_nmod = 0
++
++     DO I = 1, GRIDC%RC%NP
++        EDM_Vloc(I) = EDM_Vloc(I) + CWORK(I,1) 
++        EDM_VCC(I) = EDM_Vh(I) + CWORK(I,1)
++     ENDDO 
++
++     CALL POTMOD(GRIDC,P,LATT_CUR,T_INFO,CWORK,CWORK1,CSTRF)
++     DO I = 1, GRIDC%RC%NP
++        EDM_Vmod(I) = EDM_Vmod(I) + CWORK(I,1) 
++        EDM_nmod(I) = EDM_nmod(I) + CWORK1(I) 
++     ENDDO 
++
++     CALL SETUNB(EDM_Vh,GRIDC)
++     CALL SETUNB(EDM_Vloc,GRIDC)
++     CALL SETUNB(EDM_VCC,GRIDC)
++     CALL SETUNB(EDM_Vmod,GRIDC)
++
++     IU = 5425
++  OPEN(UNIT=IU,FILE='EDM_VhCAR',STATUS='UNKNOWN')
++     CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++  &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++  &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++     CALL OUTCHG(GRIDC, IU, .TRUE.,EDM_Vh)
++  CLOSE(IU)
++
++  OPEN(UNIT=IU,FILE='EDM_VloCAR',STATUS='UNKNOWN')
++     CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++  &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++  &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++     CALL OUTCHG(GRIDC, IU, .TRUE.,EDM_Vloc)
++  CLOSE(IU)
++
++     EDM_VCC = EDM_VCC*(-1.0_q)
++  OPEN(UNIT=IU,FILE='EDM_VCCCAR',STATUS='UNKNOWN')
++     CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++  &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++  &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++     CALL OUTCHG(GRIDC, IU, .TRUE.,EDM_VCC)
++  CLOSE(IU)
++
++  OPEN(UNIT=IU,FILE='EDM_VmodCAR',STATUS='UNKNOWN')
++     CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++  &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++  &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++     CALL OUTCHG(GRIDC, IU, .TRUE.,EDM_Vmod)
++  CLOSE(IU)
++    
++     EDM_ne=0
++
++     SCALE=EDEPS/TPI**2
++  
++     DO I=1,GRIDC%RC%NP
++       N1= MOD((I-1),GRIDC%RC%NROW) +1
++       NC= (I-1)/GRIDC%RC%NROW+1
++       N2= GRIDC%RC%I2(NC)
++       N3= GRIDC%RC%I3(NC)
++       GX=(GRIDC%LPCTX(N1)*LATT_CUR%B(1,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(1,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(1,3))
++       GY=(GRIDC%LPCTX(N1)*LATT_CUR%B(2,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(2,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(2,3))
++       GZ=(GRIDC%LPCTX(N1)*LATT_CUR%B(3,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(3,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(3,3))
++       GSQU=GX*GX+GY*GY+GZ*GZ
++       EDM_ne(I)=EDM_Vh(I)*GSQU/SCALE*LATT_CUR%OMEGA
++!       EDM_nloc(I)=EDM_Vloc(I)*GSQU/SCALE*LATT_CUR%OMEGA   !negative sign for bader center
++!       EDM_nCC(I)=EDM_VCC(I)*GSQU/SCALE*LATT_CUR%OMEGA
++      ENDDO
++     CALL SETUNB(EDM_ne,GRIDC)
++!     CALL SETUNB(EDM_nloc,GRIDC)
++!     CALL SETUNB(EDM_nCC,GRIDC)
++     CALL SETUNB(EDM_nmod,GRIDC)
++
++  OPEN(UNIT=IU,FILE='EDM_neCAR',STATUS='UNKNOWN')
++     CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++  &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++  &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++     CALL OUTCHG(GRIDC, IU, .TRUE.,EDM_ne)
++  CLOSE(IU)
++
++  OPEN(UNIT=IU,FILE='EDM_nmodCAR',STATUS='UNKNOWN')
++     CALL OUTPOS(IU,.FALSE.,INFO%SZNAM1,LATT_CUR%SCALE,LATT_CUR%A, &
++  &             T_INFO%NTYP,T_INFO%NITYP,.FALSE., &
++  &              T_INFO%NIONS,DYN%POSION,T_INFO%LSFOR)
++     CALL OUTCHG(GRIDC, IU, .TRUE.,EDM_nmod)
++  CLOSE(IU)
++#endif
++
++
++
+       CALL POT_FLIP(CVTOT, GRIDC,WDES%NCDIJ )
+ !=======================================================================
+ ! if overlap is used :
+@@ -268,7 +408,10 @@
+       ENDDO
+ 
+       DEALLOCATE(CWORK1,CWORK)
+-
++#ifdef SUPPORT_EDM
++      DEALLOCATE(EDM_Vh,EDM_ne,EDM_VCC)!,EDM_nCC)      
++      DEALLOCATE(EDM_Vloc,EDM_Vmod,EDM_nmod) !EDM_nloc
++#endif
+       RETURN
+       END SUBROUTINE POTLOK
+ 
+@@ -284,9 +427,13 @@
+ ! corrections to the forces
+ !***********************************************************************
+ 
++#ifdef SUPPORT_EDM
++      SUBROUTINE POTXC(EXCTAB, GRIDC, INFO, WDES, LATT_CUR,CVTOT,CHTOT,DENCOR,EDM)
++#else
+       SUBROUTINE POTXC(EXCTAB, GRIDC, INFO, WDES, LATT_CUR, CVTOT,CHTOT,DENCOR)
+-      USE prec
++#endif
+ 
++      USE prec
+       USE xcgrad
+       USE setexm
+       USE mpimy
+@@ -294,6 +441,9 @@
+       USE lattice
+       USE base
+       USE wave
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
+ 
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+@@ -303,6 +453,9 @@
+       TYPE (exctable)    EXCTAB
+       TYPE (info_struct) INFO
+       TYPE (latt)        LATT_CUR
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+       COMPLEX(q) CHTOT(GRIDC%MPLWV,WDES%NCDIJ),CVTOT(GRIDC%MPLWV,WDES%NCDIJ)
+       RGRID      DENCOR(GRIDC%RL%NP)
+@@ -365,12 +518,21 @@
+           IF (INFO%LEXCHG >0) THEN
+              ! gradient corrections to LDA
+              CALL FEXCG(INFO%LEXCHG,GRIDC,LATT_CUR,XCENCG,EXCG,CVZERG,XCSIF, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CVTOT,DENCOR,EDM)
++#else
+                   CHTOT,CVTOT,DENCOR)
++#endif
+           ENDIF
+ 
+           ! LDA part of potential
+           CALL FEXCP(EXCTAB,GRIDC,LATT_CUR%OMEGA, &
++#ifdef SUPPORT_EDM
++               CHTOT,DENCOR,CVTOT,CWORK,CVZERO,EXC,XCENC,XCSIF,.TRUE.,EDM)
++#else
+                CHTOT,DENCOR,CVTOT,CWORK,CVZERO,EXC,XCENC,XCSIF,.TRUE.)
++#endif
++
+        ENDIF
+ 
+        DO ISP=1,WDES%NCDIJ
+@@ -578,7 +740,110 @@
+ 
+       CALL SETUNB(CVPS,GRIDC)
+       CALL SETUNB(CDVPS,GRIDC)
++      RETURN
++      END SUBROUTINE
+ 
++!************************ SUBROUTINE POTMOD ****************************
++! the model potential and charge density is written for 
++! energy density Method by M.Y. Nov 2009
++!
++! this subroutine calculates the model potential(CVMOD)
++! and model charge density(CNMOD)
++! multiplied by the partial structur-factors
++! on the grid of reciprocal lattice vectors 
++!
++!***********************************************************************
++
++      SUBROUTINE POTMOD(GRIDC,P,LATT_CUR,T_INFO,CVMOD,CNMOD,CSTRF)
++      USE prec
++
++      USE mpimy
++      USE mgrid
++      USE pseudo
++      USE lattice
++      USE poscar
++      USE constant
++
++      IMPLICIT COMPLEX(q) (C)
++      IMPLICIT REAL(q) (A-B,D-H,O-Z)
++
++      TYPE (grid_3d)     GRIDC
++      TYPE (type_info)   T_INFO
++      TYPE (potcar)      P (T_INFO%NTYP)
++      TYPE (latt)        LATT_CUR
++
++      COMPLEX(q) CSTRF(GRIDC%MPLWV,T_INFO%NTYP)
++      COMPLEX(q) CVMOD(GRIDC%RC%NP),CNMOD(GRIDC%RC%NP)
++
++      INTEGER NODE_ME,IONODE
++      #ifdef MPI
++           NODE_ME=GRIDC%COMM%NODE_ME
++           IONODE =GRIDC%COMM%IONODE
++      #else
++           NODE_ME=0
++           IONODE =0
++      #endif
++
++      ZVSUM=0
++      DO NT=1,T_INFO%NTYP
++         ZVSUM=ZVSUM+P(NT)%ZVALF*T_INFO%NITYP(NT)
++      ENDDO
++
++
++      CVMOD =0
++      CNMOD =0
++!=======================================================================
++! loop over all types of atoms
++! multiply structur factor by local pseudopotential
++!=======================================================================
++      typ: DO NT=1,T_INFO%NTYP
++
++      ZZ = -4*PI*P(NT)%ZVALF*FELECT
++      Rc = P(NT)%RCORE*AUTOA
++!      do_io write(9630,*)'NT',NT,'P(NT)%PCORE',Rc
++
++      N=0
++      col: DO NC=1,GRIDC%RC%NCOL
++      N2= GRIDC%RC%I2(NC)
++      N3= GRIDC%RC%I3(NC)
++      row: DO N1=1,GRIDC%RC%NROW
++        N=N+1
++!=======================================================================
++! calculate the magnitude of the reciprocal lattice vector
++!=======================================================================
++        GX= GRIDC%LPCTX(N1)*LATT_CUR%B(1,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(1,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(1,3)
++        GY= GRIDC%LPCTX(N1)*LATT_CUR%B(2,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(2,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(2,3)
++        GZ= GRIDC%LPCTX(N1)*LATT_CUR%B(3,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(3,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(3,3)
++
++        G=SQRT(GX**2+GY**2+GZ**2)*2*PI
++        IF ( ( (GRIDC%LPCTX(N1)/=0) .OR. (GRIDC%LPCTY(N2)/=0) .OR. &
++     &         (GRIDC%LPCTZ(N3)/=0) ) ) THEN
++!=======================================================================
++! convert the magnitude of the reciprocal lattice vector to a position
++! in the pseudopotential arrays and interpolate the pseudopotential and
++! its derivative
++!=======================================================================
++        IF (G < 0.5_q) THEN
++           VG = -(1._q/G**2-7._q*Rc**2/150._q+Rc**4*G**2/1100._q    &
++     &        -Rc**6*G**4/98280._q+Rc**8*G**6/13305600._q-Rc**10*G**8/2520460800._q)
++        ELSE
++           VG = -(-(72576._q-10080._q*G**2*Rc**2)*COS(G*Rc)         &
++     &         +1008._q*(72._q-4._q*G**2*Rc**2+G*Rc*(-42._q+G**2*Rc**2)*SIN(G*Rc)))  &
++     &         /(G**10 *Rc**8)
++        ENDIF
++        CVMOD(N) = CVMOD(N) + ZZ* VG/LATT_CUR%OMEGA*CSTRF(N,NT)
++        CNMOD(N) = CNMOD(N) - P(NT)%ZVALF * VG*G**2*CSTRF(N,NT)
++        ELSE
++        CVMOD(N) = (0._q,0._q)
++        CNMOD(N) = (0._q,0._q)
++        ENDIF
++
++      ENDDO row
++      ENDDO col
++      ENDDO typ
++
++      CALL SETUNB(CVMOD,GRIDC)
++      CALL SETUNB(CNMOD,GRIDC)
+       RETURN
+       END SUBROUTINE
+ 
+diff -udNr vasp.4.6.36/potex2.F vasp.4.6.36-edm/potex2.F
+--- vasp.4.6.36/potex2.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/potex2.F	2011-07-21 17:44:50.000000000 -0500
+@@ -16,17 +16,28 @@
+ !***********************************************************************
+ 
+       SUBROUTINE FEXCP(EXCTAB,GRID,OMEGA, &
++#ifdef SUPPORT_EDM
++          CHDENR,DENCOR,CVXC,DVXC,CVZERO,EXC,XCENC,XCSIF,LADD,EDM)
++#else
+           CHDENR,DENCOR,CVXC,DVXC,CVZERO,EXC,XCENC,XCSIF,LADD)
+-      USE prec
++#endif
+ 
++      USE prec
+       USE mpimy
+       USE mgrid
+       USE setexm
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
++
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+ 
+       TYPE (grid_3d)  GRID
+       TYPE (exctable) EXCTAB
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+       RGRID CHDENR(GRID%RL%NP)
+       RGRID DENCOR(GRID%RL%NP)
+@@ -36,6 +47,10 @@
+       REAL(q)  XCSIF(3,3)
+       LOGICAL :: LADD
+ 
++#ifdef SUPPORT_EDM
++      EDM%excLDA = 0
++#endif
++
+ !=======================================================================
+ !  calculate exchange-correlation on the grid using the tables
+ !=======================================================================
+@@ -90,6 +105,9 @@
+ 
+         CVZERO=CVZERO+VXC
+         EXC   =EXC   +EXE
++#ifdef SUPPORT_EDM
++        EDM%excLDA(N)=EXE*OMEGA
++#endif
+         XCF   =XCF   -VXC*REAL( CHDENR(N) ,KIND=q)
+         XCFO  =XCFO  -VXC*DENCOR(N)
+ 
+diff -udNr vasp.4.6.36/pseudo.F vasp.4.6.36-edm/pseudo.F
+--- vasp.4.6.36/pseudo.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/pseudo.F	2011-07-21 17:44:50.000000000 -0500
+@@ -376,6 +376,10 @@
+          P(NTYP)%R%D     =(P(NTYP)%R%REND/P(NTYP)%R%RSTART)**(1._q/(NMAX-1))
+          P(NTYP)%R%H     =LOG(P(NTYP)%R%D)
+          P(NTYP)%R%RMAX=P(NTYP)%PSDMAX
++#ifdef SUPPORT_EDM
++         CALL POTTORHO( P(NTYP)%ZVALF, NPSPTS, P(NTYP)%PSP(:,2), P(NTYP)%PSGMAX/NPSPTS, &
++                   .FALSE. , NMAX, P(NTYP)%R%R ,  P(NTYP)%POTPSC )                        
++#endif
+  
+          CALL POTTORHO( P(NTYP)%ZVALF, NPSPTS, P(NTYP)%PSP(:,2), P(NTYP)%PSGMAX/NPSPTS, &
+                    .TRUE. , NMAX, P(NTYP)%R%R ,  P(NTYP)%POTPSC )                        
+@@ -567,6 +571,9 @@
+       P%ZVALF=0
+       P%POMASS=0
+       P%RWIGS=0
++#ifdef SUPPORT_EDM
++      P%RCORE=0
++#endif
+       P%EATOM=0
+       P%ENMAXA=0
+       P%ENMINA=0
+@@ -625,6 +632,9 @@
+          P%ZVALF_ORIG=EDUM
+       ENDIF
+       IF (TAG(1:L)=='POMASS') P%POMASS=EDUM
++#ifdef SUPPORT_EDM
++      IF (TAG(1:L)=='RCORE')  P%RCORE =EDUM
++#endif
+       IF (TAG(1:L)=='RWIGS')  P%RWIGS =EDUM
+       IF (TAG(1:L)=='ENMAX')  THEN
+         P%ENMAXA=EDUM
+diff -udNr vasp.4.6.36/pseudo.inc vasp.4.6.36-edm/pseudo.inc
+--- vasp.4.6.36/pseudo.inc	2011-07-21 00:06:39.438374816 -0500
++++ vasp.4.6.36-edm/pseudo.inc	2011-05-21 00:30:55.000000000 -0500
+@@ -22,6 +22,9 @@
+         REAL(q) PSMAXN              ! maximal G for non local potential
+         REAL(q) PSRMAX              ! maximal r for non local contrib.
+         REAL(q) PSDMAX              ! maximal r for augmentation charge
++! #ifdef SUPPORT_EDM
++        REAL(q) RCORE  
++! #endif	
+         REAL(q),POINTER :: PSP(:,:) ! local pseudopotential in rec. space
+         REAL(q),POINTER :: PSPCOR(:)! partial core information in rec. space
+         REAL(q),POINTER :: PSPRHO(:)! atomic pseudo charge density in rec. space
+diff -udNr vasp.4.6.36/us.F vasp.4.6.36-edm/us.F
+--- vasp.4.6.36/us.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/us.F	2011-07-21 17:44:50.000000000 -0500
+@@ -26,7 +26,11 @@
+   INTERFACE
+ 
+       SUBROUTINE SETDIJ(WDES, GRIDC_,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO, LOVERL, &
++#ifdef SUPPORT_EDM
++       LMDIM,CDIJ,CQIJ, CVTOT_, IRDMAA,IRDMAX, DISX,DISY,DISZ,EDM)
++#else
+        LMDIM,CDIJ,CQIJ, CVTOT_, IRDMAA,IRDMAX, DISX,DISY,DISZ)
++#endif
+       USE prec
+       USE pseudo
+       USE poscar
+@@ -37,6 +41,10 @@
+       USE asa
+       USE paw
+       USE constant
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
++
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+ 
+@@ -46,6 +54,9 @@
+       TYPE (transit)     C_TO_US    ! index table between GRIDC and GRIDUS
+       TYPE (latt)        LATT_CUR
+       TYPE (wavedes)     WDES
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+       INTEGER IRDMAX      ! allocation required for augmentation
+       INTEGER IRDMAA      ! actual maximum augmentation index
+@@ -281,7 +292,11 @@
+ !***********************************************************************
+ 
+       SUBROUTINE FORDEP(WDES, GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO, LOVERL, &
++#ifdef SUPPORT_EDM
++       LMDIM,CDIJ,CQIJ,CRHODE, CVTOT, IRDMAX, FORNL,EDM)
++#else
+        LMDIM,CDIJ,CQIJ,CRHODE, CVTOT, IRDMAX, FORNL)
++#endif
+       USE prec
+ 
+       USE pseudo
+@@ -290,6 +305,9 @@
+       USE mgrid
+       USE lattice
+       USE wave
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+ 
+@@ -299,6 +317,9 @@
+       TYPE (grid_3d)     GRIDC,GRIDUS
+       TYPE (transit)     C_TO_US    ! index table between GRIDC and GRIDUS
+       TYPE (latt)        LATT_CUR
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+       INTEGER  IRDMAX      ! allocation required for augmentation
+       INTEGER  IRDMAA      ! actual maximum augmentation index
+@@ -337,7 +358,11 @@
+       DISPL=0
+ #ifdef noHighPrec
+       CALL SETDIJ(WDES, GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO, LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ, CVTOT,IRDMAA,IRDMAX, DISPL(1),DISPL(2),DISPL(3),EDM)
++#else
+                   LMDIM,CDIJ,CQIJ, CVTOT,IRDMAA,IRDMAX, DISPL(1),DISPL(2),DISPL(3))
++#endif
+ 
+       NIS=1
+       DO NT=1,WDES%NTYP
+@@ -359,7 +384,11 @@
+       DISPL=0
+       DISPL(IDIR)=-DIS/2
+       CALL SETDIJ(WDES, GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO, LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,DISPL(1),DISPL(2),DISPL(3),EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,DISPL(1),DISPL(2),DISPL(3))
++#endif
+ 
+       NIS=1
+       DO NT=1,WDES%NTYP
+@@ -379,7 +408,11 @@
+ #endif
+ 
+       CALL SETDIJ(WDES, GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO,LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,DISPL(1),DISPL(2),DISPL(3),EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,DISPL(1),DISPL(2),DISPL(3))
++#endif
+ 
+       NIS=1
+       DO NT=1,WDES%NTYP
+@@ -445,7 +478,11 @@
+ !***********************************************************************
+ 
+       SUBROUTINE STRDEP(WDES, GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO, LOVERL, &
++#ifdef SUPPORT_EDM
++       LMDIM,CDIJ,CQIJ,CRHODE, CVTOT, IRDMAX, ISIF,AUGSIF,EDM)
++#else
+        LMDIM,CDIJ,CQIJ,CRHODE, CVTOT, IRDMAX, ISIF,AUGSIF)
++#endif
+       USE prec
+ 
+       USE pseudo
+@@ -454,6 +491,9 @@
+       USE mgrid
+       USE lattice
+       USE wave
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+ 
+@@ -463,6 +503,9 @@
+       TYPE (grid_3d)     GRIDC,GRIDUS
+       TYPE (transit)     C_TO_US    ! index table between GRIDC and GRIDUS
+       TYPE (latt)        LATT_CUR,LATT_FIN
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+       INTEGER  IRDMAX      ! allocation required for augmentation
+       INTEGER  IRDMAA      ! actual maximum augmentation index
+@@ -491,7 +534,11 @@
+       CALL LATTIC(LATT_CUR)
+ 
+       CALL SETDIJ(WDES,GRIDC,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO,LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q,EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q)
++#endif
+ 
+       EAUG=0
+       NIS=1
+@@ -535,7 +582,11 @@
+       CALL LATTIC(LATT_FIN)
+ 
+       CALL SETDIJ(WDES,GRIDC,GRIDUS,C_TO_US,LATT_FIN,P,T_INFO,LOVERL, &
++#ifdef SUPPORT_EDM
++                  LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q,EDM)
++#else
+                   LMDIM,CDIJ,CQIJ,CVTOT,IRDMAA,IRDMAX,.0_q,.0_q,.0_q)
++#endif
+ 
+       EAUGD=0
+       NIS=1
+@@ -1014,7 +1065,11 @@
+ !***********************************************************************
+ 
+       SUBROUTINE SETDIJ(WDES, GRIDC_,GRIDUS,C_TO_US,LATT_CUR,P,T_INFO, LOVERL, &
++#ifdef SUPPORT_EDM
++        LMDIM,CDIJ,CQIJ, CVTOT_, IRDMAA,IRDMAX, DISX,DISY,DISZ,EDM)
++#else
+         LMDIM,CDIJ,CQIJ, CVTOT_, IRDMAA,IRDMAX, DISX,DISY,DISZ)
++#endif
+       USE prec
+       USE pseudo
+       USE poscar
+@@ -1025,6 +1080,10 @@
+       USE asa
+       USE paw
+       USE constant
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
++
+       IMPLICIT COMPLEX(q) (C)
+       IMPLICIT REAL(q) (A-B,D-H,O-Z)
+ 
+@@ -1035,6 +1094,9 @@
+       TYPE (transit)     C_TO_US    ! index table between GRIDC and GRIDUS
+       TYPE (latt)        LATT_CUR
+       TYPE (wavedes)     WDES
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+       INTEGER  IRDMAX      ! allocation required for augmentation
+       INTEGER  IRDMAA      ! actual maximum augmentation index
+@@ -1051,6 +1113,11 @@
+       REAL(q) QVEC(3),QR
+       REAL(q),ALLOCATABLE :: XS(:),YS(:),ZS(:)
+ !-MM- end of addition
++
++#ifdef SUPPORT_EDM
++      INTEGER  NODE_ME, IONODE
++#endif
++
+ #ifdef MPI
+       ! mind: in the MPI version CTMP holds all elements
+       ! to achieve good load balancing CDIJ is calculated locally on all nodes,
+@@ -1060,6 +1127,16 @@
+ #else
+   #define CTMP CDIJ
+ #endif
++
++#ifdef SUPPORT_EDM
++      IONODE=0
++      NODE_ME=0
++#ifdef MPI
++      IONODE  = WDES%COMM%IONODE
++      NODE_ME = WDES%COMM%NODE_ME
++#endif
++#endif
++
+       LADDITIONAL=(GRIDUS%NGX/=GRIDC_%NGX) .OR. &
+                   (GRIDUS%NGY/=GRIDC_%NGY) .OR. &
+                   (GRIDUS%NGZ/=GRIDC_%NGZ)
+@@ -1265,6 +1342,7 @@
+       !   WRITE(0,'("DLM",I2,10F7.4)') L,(DLM(L**2+M),M=1,(L*2)+1)
+       ENDDO
+       CALL CALC_DLLMM( CTMP(:,:,NI,ISP), DLM, P(NT))
++
+       ENDIF
+ !-MM- end of alterations
+       ENDIF lpaw
+@@ -1288,6 +1366,10 @@
+       CALL RL_FLIP(CVTOT_(1,1),GRIDC_,WDES%NCDIJ,.TRUE.)
+ 
+       ENDIF overl
++#ifdef SUPPORT_EDM
++   EDM%RHOIJ(1:LMDIM,1:LMDIM,1:T_INFO%NIONS)=CTMP(1:LMDIM,1:LMDIM,1:T_INFO%NIONS,1)
++#endif
++
+ !-----------------------------------------------------------------------
+ ! now set up CQIJ and add diagonal part to CDIJ
+ ! find blocks with same quantum number L
+Binary files vasp.4.6.36/vasp.mpi and vasp.4.6.36-edm/vasp.mpi differ
+Binary files vasp.4.6.36/vasp.mpi.PAWGGA and vasp.4.6.36-edm/vasp.mpi.PAWGGA differ
+diff -udNr vasp.4.6.36/xcgrad.F vasp.4.6.36-edm/xcgrad.F
+--- vasp.4.6.36/xcgrad.F	2011-07-21 17:38:57.000000000 -0500
++++ vasp.4.6.36-edm/xcgrad.F	2011-07-21 17:44:50.000000000 -0500
+@@ -35,11 +35,19 @@
+       CONTAINS
+ 
+       SUBROUTINE FEXCG(LEXCHG,GRIDC,LATT_CUR,XCENC,EXC,CVZERO,XCSIF, &
++#ifdef SUPPORT_EDM
++                  CHTOT,CWORK,DENCOR,EDM)
++#else
+                   CHTOT,CWORK,DENCOR)
++#endif
++
+       USE prec
+       USE lattice
+       USE mpimy
+       USE mgrid
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
+ 
+       IMPLICIT COMPLEX(q) (C)
+ 
+@@ -47,6 +55,9 @@
+ 
+       TYPE (grid_3d)     GRIDC
+       TYPE (latt)        LATT_CUR
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+       COMPLEX(q)  CHTOT(GRIDC%MPLWV),CWORK(GRIDC%MPLWV)
+       RGRID       DENCOR(GRIDC%RL%NP)
+@@ -62,7 +73,11 @@
+       CALL FEXCG_(LEXCHG,GRIDC,LATT_CUR,XCENC,EXC,CVZERO,XCSIF, &
+      &            CWGRAD,CHTOT,CWORK, &
+      &            CWGRAD,CHTOT,CWORK, &
++#ifdef SUPPORT_EDM
++     &            DENCOR,DWORKG,DWORK1,DWORK2,DWORK3,DCHARG,EDM)
++#else
+      &            DENCOR,DWORKG,DWORK1,DWORK2,DWORK3,DCHARG)
++#endif
+ 
+       DEALLOCATE(CWGRAD,DWORKG,DWORK1,DWORK2,DWORK3,DCHARG)
+ 
+@@ -73,13 +88,20 @@
+       SUBROUTINE FEXCG_(LEXCHG,GRIDC,LATT_CUR,XCENC,EXC,CVZERO,XCSIF, &
+      &            CWGRAD,CHTOT,CWORK, &
+      &            DWGRAD,DHTOT,DWORK, &
++#ifdef SUPPORT_EDM
++     &            DENCOR,DWORKG,DWORK1,DWORK2,DWORK3,DCHARG,EDM)
++#else
+      &            DENCOR,DWORKG,DWORK1,DWORK2,DWORK3,DCHARG)
++#endif
+       USE prec
+ 
+       USE lattice
+       USE mpimy
+       USE mgrid
+       USE constant
++#ifdef SUPPORT_EDM
++      USE edenm
++#endif
+ 
+       IMPLICIT COMPLEX(q) (C)
+ 
+@@ -87,6 +109,9 @@
+ 
+       TYPE (grid_3d)     GRIDC
+       TYPE (latt)        LATT_CUR
++#ifdef SUPPORT_EDM
++      TYPE (EDen)        EDM
++#endif
+ 
+ !  ATTENTION ATTENTION ATTENTION ATTENTION ATTENTION ATTENTION
+ 
+@@ -102,6 +127,10 @@
+               DWORK3(GRIDC%RL%NP),DCHARG(GRIDC%RL%NP)
+       REAL(q) XCSIF(3,3)
+ 
++#ifdef SUPPORT_EDM
++      EDM%excGGA = 0 
++#endif
++
+ #ifdef MPI
+       NODE_ME=GRIDC%COMM%NODE_ME
+       IONODE =GRIDC%COMM%IONODE
+@@ -238,12 +267,16 @@
+          CALL GGAALL(LEXCHG,RHO*AUTOA3,DWORKG(I)*AUTOA4,EXCL,DEXC,DVXC,.FALSE.)
+ #endif
+          EXC=EXC+EXCL*RHO*RYTOEV*LATT_CUR%OMEGA
++#ifdef SUPPORT_EDM
++       EDM%excGGA(I)=EXCL*RHO*RYTOEV*LATT_CUR%OMEGA
++#endif
+          DVXC=DVXC*RYTOEV*AUTOA
+         !  store d f/ d (|d rho| ) / |d rho|  in DWORK
+          DWORK(I)  = DVXC / MAX(DWORKG(I),1.E-10_q)
+         !  store d f/ d rho  in DWORKG
+          DWORKG(I) = DEXC*RYTOEV
+       ENDDO
++
+ !=======================================================================
+ ! gradient terms in stress tensor
+ !          d    f_xc     grad rho  x grad rho
