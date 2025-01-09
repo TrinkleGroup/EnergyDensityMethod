@@ -17,8 +17,19 @@ Please see the [Reference](#references) part for detailed explanation and mathem
 Below is a guideline for users who wish to perform EDM calculations.
 
 # Compilation
-EDM is implemented in the framework of [Vienna Ab initio Simulation Package (VASP)](https://www.vasp.at/). VASP is a commercial software and a valid license is required for authorized uses. The implementation of EDM is presented as a patch to the original VASP source code. The current version of EDM code is based on VASP version 5.4.4. The compilation instructions are as below.
+EDM is implemented in the framework of [Vienna Ab initio Simulation Package (VASP)](https://www.vasp.at/). VASP is a commercial software and a valid license is required for authorized uses. The implementation of EDM is presented as a patch to the original VASP source code. The current version of EDM code is based on VASP version 5.4.4.
 
+## Requirements and dependencies
+To compile EDM, the user needs the source code of VASP 5.4.4, and the [mandatory software and packages](https://www.vasp.at/wiki/index.php/Installing_VASP.5.X.X) needed to compile the parallel version of VASP 5.4.4 in their machine, which include:
+* Fortran and C compilers;
+* An implementation of MPI (Message Passing Interface);
+* Numerical libraries like BLAS, LAPACK, ScaLAPACK, and FFTW.
+
+The current versions of EDM, including the stable version v3.2 and the beta version v3.4, are developed and tested using the Intel compilers (version 18.0) with its MKL for the numerical libraries, along with the MPI implementation by Open MPI (version 4.1.1) for parallelization.
+
+**WARNING**: There is a known issue with the v3.2 and v3.4 EDM code if compiled using newer Intel compilers (version 2021 and newer), which reportedly causes segmentation faults or problematic results in some cases, possibly due to parallelization problems. The user is advised to try older Intel compilers if this happens. We currently do not have access to newer Intel compilers to test and debug this issue, but we will try to fix it in the future.
+
+## Compilation Steps
 1. Prepare the VASP source code and check its installation requirements in your machine. For the source code, make sure that all the bug-fixing patches have been applied. VASP 5.4.4 needs to be patched with file ```patch.5.4.4.16052018```. See the [VASP manual for installation](https://www.vasp.at/wiki/index.php/Installing_VASP.5.X.X) for details.
 
 2. Place the EDM patch file, for example, file ```EDM_VASP.5.4.4_v3.2_stable.patch``` in the root directory of VASP's source code. Run
